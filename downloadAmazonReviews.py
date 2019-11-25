@@ -10,6 +10,8 @@ urlPart2 = "/?ie=UTF8&showViewpoints=0&pageNumber="
 urlPart3 = "&sortBy=recent"
 MAX_PAGE = 100
 MAX_RETRY = 10
+MONTHS = ["August", "November", "September", "October"]
+MIN_YEAR = 2019
 CATEGORY_DIR_NAME = "Categories"
 REVIEW_DIR_NAME = "Reviews"
 
@@ -31,11 +33,18 @@ def writeToCSV(productID, productCategory, productName, name, rating, date, veri
     CSV_WRITER.writerow([productID, productCategory, productName, name, date, vp, rating, title, body])
 
 def parsePage(fileData, productID, productCategory, productName):
+    
     soup = BeautifulSoup(fileData, "lxml")
     reviewList = soup.select('#cm_cr-review_list')
     print("Length", len(reviewList))
+    if len(reviewList) == 0:
+        with open('error.html' , 'w+') as f:
+            f.write(fileData)
+            exit(1)
     links = reviewList[0].find_all('div')
     print("Link Length", len(links))
+    if len(links) <= 2:
+        return "Error"
     for card in links:
         if(card.get('data-hook') == 'review'):
             name = ""
@@ -64,8 +73,13 @@ def parsePage(fileData, productID, productCategory, productName):
                 elif(span.get('class') and span.get('class')[0] == 'a-icon-alt'):
                     print('Rating:  ', span.text)
                     rating = span.text
+            if int(date.split(' ')[2]) < MIN_YEAR:
+                return "DateExceeded"
+            elif date.split(' ')[0] not in MONTHS:
+                return "DateExceeded"
             writeToCSV(productID, productCategory, productName, name, rating, date, vp, body, title)
             print()
+    return "Done"
 
 def downloadReviewsOnePage(page, productID, productCategory, productName):
     sleepTime = 5
@@ -73,22 +87,40 @@ def downloadReviewsOnePage(page, productID, productCategory, productName):
         time.sleep(sleepTime)
         referer = urlPart1 + productID + urlPart2 + "1" + urlPart3
         url = urlPart1 + productID + urlPart2 + page + urlPart3
-        r = requests.get(url ,headers={'User-Agent': USER_AGENT, 'Referrer' : referer})
+        try:
+            r = requests.get(url ,headers={'User-Agent': USER_AGENT, 'Referrer' : referer})
+        except:
+            print('Failed Request')
+            sleepTime = sleepTime + 10
+            continue
         print('Page:', page, 'StatusCode:', r.status_code)
         if r.status_code == '503':
             sleepTime = sleepTime + 5
             continue
         else:                
-            parsePage(r.text, productID, productCategory, productName)
-        return
+            resp = parsePage(r.text, productID, productCategory, productName)
+            if resp == "Error":
+                sleepTime = 60
+                print("Error")
+            else:
+                return resp
 
 def scrapeOneProductID(productID, productCategory):
     mainPageURL = 'https://www.amazon.com/dp/' + productID
     mainPageResult = requests.get(mainPageURL, headers = {'User-Agent' : USER_AGENT, 'Referrer' : 'https://amazon.com'})
-    soup = BeautifulSoup(mainPageResult.text, "lxml")
-    productName = soup.select('#productTitle')[0].text.strip()
+    print(mainPageResult.status_code)
+    try:
+        soup = BeautifulSoup(mainPageResult.text, "lxml")
+        productName = soup.select('#productTitle')[0].text.strip()
+    
+    except:
+        with open('error.html','w+') as f:
+            f.write(mainPageResult.text)
+        exit(1)
     for i in range (1, MAX_PAGE):
-        downloadReviewsOnePage(str(i), productID, productCategory, productName)
+        res = downloadReviewsOnePage(str(i), productID, productCategory, productName)
+        if res == "DateExceeded":
+            return
     
 def main():
     categoryList = list(map(lambda x: x.split('.')[0], os.listdir(CATEGORY_DIR_NAME)))
