@@ -4,6 +4,9 @@ import sys
 import time
 from bs4 import BeautifulSoup
 import csv
+import random
+PROXYLISTHTTP = []
+PROXYLISTHTTPS = []
 USER_AGENT = 'Mozilla/5.0 (X11; Linux i686) AppleWebKit/534.30 (KHTML, like Gecko) Ubuntu/11.04 Chromium/12.0.742.91 Chrome/12.0.742.91 Safari/534.30'
 urlPart1 = "http://www.amazon.com/product-reviews/"
 urlPart2 = "/?ie=UTF8&showViewpoints=0&pageNumber="
@@ -14,9 +17,19 @@ MONTHS = ["August", "November", "September", "October"]
 MIN_YEAR = 2019
 CATEGORY_DIR_NAME = "Categories"
 REVIEW_DIR_NAME = "Reviews"
-
 CSV_FILE = None
 CSV_WRITER = None
+PROXY_FILE = 'proxy.txt'
+def loadProxies():
+    with open(PROXY_FILE, 'r') as f:
+        proxyList = f.read().split('\n')
+        for proxy in proxyList:
+            splitProxy = proxy.split(' ')
+            if splitProxy[2] == 'yes':
+                PROXYLISTHTTPS.append('https://' + splitProxy[0] + ":" + splitProxy[1])
+            else:
+                PROXYLISTHTTP.append('http://' + splitProxy[0] + ":" + splitProxy[1])
+
 def openCSVFile(productCategory):
     global CSV_FILE
     if not os.path.isdir(REVIEW_DIR_NAME):
@@ -87,8 +100,12 @@ def downloadReviewsOnePage(page, productID, productCategory, productName):
         time.sleep(sleepTime)
         referer = urlPart1 + productID + urlPart2 + "1" + urlPart3
         url = urlPart1 + productID + urlPart2 + page + urlPart3
+        proxies = {
+            "http": random.choice(PROXYLISTHTTP),
+            "https": random.choice(PROXYLISTHTTPS)
+        }
         try:
-            r = requests.get(url ,headers={'User-Agent': USER_AGENT, 'Referrer' : referer})
+            r = requests.get(url ,headers={'User-Agent': USER_AGENT, 'Referrer' : referer}, proxies=proxies, verify=False)
         except:
             print('Failed Request')
             sleepTime = sleepTime + 10
@@ -107,7 +124,11 @@ def downloadReviewsOnePage(page, productID, productCategory, productName):
 
 def scrapeOneProductID(productID, productCategory):
     mainPageURL = 'https://www.amazon.com/dp/' + productID
-    mainPageResult = requests.get(mainPageURL, headers = {'User-Agent' : USER_AGENT, 'Referrer' : 'https://amazon.com'})
+    proxies = {
+        "http": random.choice(PROXYLISTHTTP),
+        "https": random.choice(PROXYLISTHTTPS)
+    }
+    mainPageResult = requests.get(mainPageURL, headers = {'User-Agent' : USER_AGENT, 'Referrer' : 'https://amazon.com'}, proxies=proxies, verify=False)
     print(mainPageResult.status_code)
     try:
         soup = BeautifulSoup(mainPageResult.text, "lxml")
@@ -123,6 +144,7 @@ def scrapeOneProductID(productID, productCategory):
             return
     
 def main():
+    loadProxies()
     categoryList = list(map(lambda x: x.split('.')[0], os.listdir(CATEGORY_DIR_NAME)))
     for category in categoryList:
         openCSVFile(category)
