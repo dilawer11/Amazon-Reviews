@@ -5,14 +5,22 @@ import time
 from bs4 import BeautifulSoup
 import csv
 import random
+from proxy import getProxiesHTTP, getProxiesHTTPS
+import threading
 PROXYLISTHTTP = []
 PROXYLISTHTTPS = []
-USER_AGENT = 'Mozilla/5.0 (X11; Linux i686) AppleWebKit/534.30 (KHTML, like Gecko) Ubuntu/11.04 Chromium/12.0.742.91 Chrome/12.0.742.91 Safari/534.30'
+USER_AGENT = [  
+                'Mozilla/5.0 (X11; Linux i686) AppleWebKit/534.30 (KHTML, like Gecko) Ubuntu/11.04 Chromium/12.0.742.91 Chrome/12.0.742.91 Safari/534.30',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.135 Safari/537.36 Edge/12.246',
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_2) AppleWebKit/601.3.9 (KHTML, like Gecko) Version/9.0.2 Safari/601.3.9',
+                'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/47.0.2526.111 Safari/537.36',
+                'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:15.0) Gecko/20100101 Firefox/15.0.1'
+            ]
 urlPart1 = "http://www.amazon.com/product-reviews/"
 urlPart2 = "/?ie=UTF8&showViewpoints=0&pageNumber="
 urlPart3 = "&sortBy=recent"
 MAX_PAGE = 100
-MAX_RETRY = 10
+MAX_RETRY = 1000
 MONTHS = ["August", "November", "September", "October"]
 MIN_YEAR = 2019
 CATEGORY_DIR_NAME = "Categories"
@@ -20,21 +28,21 @@ REVIEW_DIR_NAME = "Reviews"
 CSV_FILE = None
 CSV_WRITER = None
 PROXY_FILE = 'proxy.txt'
+LASTREQUESTTIME = 0
 def loadProxies():
-    with open(PROXY_FILE, 'r') as f:
-        proxyList = f.read().split('\n')
-        for proxy in proxyList:
-            splitProxy = proxy.split(' ')
-            if splitProxy[2] == 'yes':
-                PROXYLISTHTTPS.append('https://' + splitProxy[0] + ":" + splitProxy[1])
-            else:
-                PROXYLISTHTTP.append('http://' + splitProxy[0] + ":" + splitProxy[1])
-
+    while(1):
+        print('Updating Proxies')
+        global PROXYLISTHTTP
+        global PROXTLISTHTTPS
+        PROXYLISTHTTP = getProxiesHTTP()
+        PROXYLISTHTTPS = getProxiesHTTPS()
+        print('Updates Proxies : HTTP=' + str(len(PROXYLISTHTTP)) + ' ' + 'HTTPS=' + str(len(PROXTLISTHTTPS)))
+        time.sleep(300) #Sleep for 5 minutes
 def openCSVFile(productCategory):
     global CSV_FILE
     if not os.path.isdir(REVIEW_DIR_NAME):
         os.mkdir(REVIEW_DIR_NAME)
-    CSV_FILE= open(os.path.join(REVIEW_DIR_NAME, productCategory) + '.csv', 'w+')
+    CSV_FILE= open(os.path.join(REVIEW_DIR_NAME, productCategory) + '.csv', 'a+')
     global CSV_WRITER
     CSV_WRITER = csv.writer(CSV_FILE, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
     
@@ -53,11 +61,13 @@ def parsePage(fileData, productID, productCategory, productName):
     if len(reviewList) == 0:
         with open('error.html' , 'w+') as f:
             f.write(fileData)
-            exit(1)
+        return "Error"
     links = reviewList[0].find_all('div')
     print("Link Length", len(links))
-    if len(links) <= 2:
+    if len(links) < 2:
         return "Error"
+    elif len(links) == 2:
+        return "DateExceeded"
     for card in links:
         if(card.get('data-hook') == 'review'):
             name = ""
@@ -96,7 +106,9 @@ def parsePage(fileData, productID, productCategory, productName):
 
 def downloadReviewsOnePage(page, productID, productCategory, productName):
     sleepTime = 5
-    for _ in range(0, MAX_RETRY):
+    choiceArray = [0,0,1]
+    for j in range(0, MAX_RETRY):
+        loadProxies()
         time.sleep(sleepTime)
         referer = urlPart1 + productID + urlPart2 + "1" + urlPart3
         url = urlPart1 + productID + urlPart2 + page + urlPart3
@@ -105,10 +117,18 @@ def downloadReviewsOnePage(page, productID, productCategory, productName):
             "https": random.choice(PROXYLISTHTTPS)
         }
         try:
-            r = requests.get(url ,headers={'User-Agent': USER_AGENT, 'Referrer' : referer}, proxies=proxies, verify=False)
-        except:
+            i = random.choice(choiceArray)
+            if i == 0 or j < 5:
+                r = requests.get(url ,headers={'User-Agent': random.choice(USER_AGENT), 'Referrer' : referer})
+            else:
+                r = requests.get(url ,headers={'User-Agent': random.choice(USER_AGENT), 'Referrer' : referer}, proxies=proxies)
+        except Exception as e:
+            if i == 0 or j < 5:
+                sleepTime = sleepTime + 10
+            else:
+                sleepTime = min(120,sleepTime)
             print('Failed Request')
-            sleepTime = sleepTime + 10
+            print(e)
             continue
         print('Page:', page, 'StatusCode:', r.status_code)
         if r.status_code == '503':
@@ -117,34 +137,37 @@ def downloadReviewsOnePage(page, productID, productCategory, productName):
         else:                
             resp = parsePage(r.text, productID, productCategory, productName)
             if resp == "Error":
-                sleepTime = 60
+                sleepTime = 30
                 print("Error")
             else:
                 return resp
 
 def scrapeOneProductID(productID, productCategory):
-    mainPageURL = 'https://www.amazon.com/dp/' + productID
-    proxies = {
-        "http": random.choice(PROXYLISTHTTP),
-        "https": random.choice(PROXYLISTHTTPS)
-    }
-    mainPageResult = requests.get(mainPageURL, headers = {'User-Agent' : USER_AGENT, 'Referrer' : 'https://amazon.com'}, proxies=proxies, verify=False)
-    print(mainPageResult.status_code)
-    try:
-        soup = BeautifulSoup(mainPageResult.text, "lxml")
-        productName = soup.select('#productTitle')[0].text.strip()
-    
-    except:
-        with open('error.html','w+') as f:
-            f.write(mainPageResult.text)
-        exit(1)
-    for i in range (1, MAX_PAGE):
-        res = downloadReviewsOnePage(str(i), productID, productCategory, productName)
-        if res == "DateExceeded":
-            return
+    while(1):
+        mainPageURL = 'https://www.amazon.com/dp/' + productID
+        try:
+            mainPageResult = requests.get(mainPageURL, headers = {'User-Agent' : random.choice(USER_AGENT), 'Referrer' : 'https://amazon.com'})
+        except Exception as e:
+            print("Failed")
+            print(e)
+            continue
+        try:
+            soup = BeautifulSoup(mainPageResult.text, "lxml")
+            productName = soup.select('#productTitle')[0].text.strip()
+            print("Request Succeded")
+        except:
+            with open('error.html','w+') as f:
+                f.write(mainPageResult.text)
+            time.sleep(30)
+            continue
+        for i in range (1, MAX_PAGE):
+            res = downloadReviewsOnePage(str(i), productID, productCategory, productName)
+            if res == "DateExceeded":
+                return
+        return
     
 def main():
-    loadProxies()
+    threading.Thread(target=loadProxies).start()
     categoryList = list(map(lambda x: x.split('.')[0], os.listdir(CATEGORY_DIR_NAME)))
     for category in categoryList:
         openCSVFile(category)
